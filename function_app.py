@@ -111,7 +111,7 @@ def sport_coach_answer(user_message):
     # -- get baselines
     end_date = date.today()
     start_date = end_date - timedelta(days=60)
-    url = f'https://api.ouraring.com/v2/usercollection/sleep?start_date={start_date}&end_date={end_date}'
+    url = f'https://api.ouraring.com/v2/usercollection/sleep?start_date={start_date}'
     response = requests.get(url, headers=headers)
     try:
         data = response.json()['data']
@@ -129,9 +129,8 @@ def sport_coach_answer(user_message):
         print(f"Error fetching baselines: {e}")
 
     # get aggregated counts for every unique activity past 365 days
-    end_date = date.today()
     start_date = end_date - timedelta(days=365)
-    url = f'https://api.ouraring.com/v2/usercollection/workout?start_date={start_date}&end_date={end_date}'
+    url = f'https://api.ouraring.com/v2/usercollection/workout?start_date={start_date}'
     response = requests.get(url, headers=headers)
     activities = {'Activity counts': {}}
     try:
@@ -160,9 +159,8 @@ def sport_coach_answer(user_message):
         daily_stats[str(i) + " days ago"] = {"Morning data": {}, "Training data": []}
 
     # -- get morning data
-    end_date = date.today()
     start_date = end_date - timedelta(days=14)
-    url = f'https://api.ouraring.com/v2/usercollection/sleep?start_date={start_date}&end_date={end_date}'
+    url = f'https://api.ouraring.com/v2/usercollection/sleep?start_date={start_date}'
     response = requests.get(url, headers=headers)
     try:
         data = response.json()['data']
@@ -177,10 +175,8 @@ def sport_coach_answer(user_message):
         print(f"Error fetching morning data: {e}")
 
     # -- get training data
-    end_date = date.today()
     start_date = end_date - timedelta(days=14)
-
-    url = f"https://api.ouraring.com/v2/usercollection/workout?start_date={start_date}&end_date={end_date}"
+    url = f"https://api.ouraring.com/v2/usercollection/workout?start_date={start_date}"
     response = requests.get(url, headers=headers)
     try:
         training_data = response.json()['data']
@@ -230,10 +226,10 @@ def sport_coach_answer(user_message):
     silent_notes = get_silent_notes()
 
     # construct context
-    context = f"Personal info and baselines: {personal_info}\n\n"
-    context += f"Daily stats (last 14 days): {daily_stats}\n\n"
-    context += f"User instructions: {user_instructions}\n\n"
-    context += f"LLM silent notes: {silent_notes}\n\n"
+    context = f"Personal info and baselines: {personal_info}\n\n\n"
+    context += f"Daily stats (last 14 days): {daily_stats}\n\n\n"
+    context += f"User instructions: {user_instructions}\n\n\n"
+    context += f"LLM silent notes: {silent_notes}\n\n\n"
 
     # construct context string
     sysprompt = f"You are a professional sport coach. Answer the user questions. Here is the context:\n{context}"
@@ -250,7 +246,7 @@ def sport_coach_answer(user_message):
         history.append({"role": "assistant", "content": answer[:1000] + "..."})
     else:
         history.append({"role": "assistant", "content": answer})
-    save_history(history)
+    #save_history(history)
     # return as plain text
     return answer
 
