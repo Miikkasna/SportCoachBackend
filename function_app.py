@@ -27,7 +27,7 @@ container_client = blob_service_client.get_container_client("tmp")
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
-def get_history(n=5):
+def get_history(n=1000):
     blob_name = "history.json"
     blob_client = container_client.get_blob_client(blob_name)
     try:
@@ -59,17 +59,33 @@ def save_user_instructions(instructions):
     blob_client = container_client.get_blob_client(blob_name)
     blob_client.upload_blob(instructions, overwrite=True)
 
-def ask_gpt(sysprompt, history, user_turn):
+def get_silent_notes():
+    blob_name = "silent_notes.txt"
+    blob_client = container_client.get_blob_client(blob_name)
+    try:
+        notes = blob_client.download_blob().readall().decode("utf-8")
+        return notes
+    except Exception as e:
+        logging.error(f"Error retrieving silent notes: {e}")
+        return "No notes yet."
+
+def save_silent_notes(notes):
+    blob_name = "silent_notes.txt"
+    blob_client = container_client.get_blob_client(blob_name)
+    blob_client.upload_blob(notes, overwrite=True)
+
+def ask_gpt(sysprompt, user_turn, history=None):
     # history: list[{"role":"user"/"assistant","content": str}]
     messages = [{"role": "system", "content": sysprompt}]
-    messages.extend(history)
+    if history:
+        messages.extend(history)
     messages.append({"role": "user", "content": user_turn})
 
     response = gptclient.chat.completions.create(
         model=model_name,
         messages=messages,
         temperature=0.7,
-        max_tokens=1600,
+        max_tokens=3000,
         top_p=0.95,
         frequency_penalty=0.0,  # 0.9 is usually too high; harms lists/enumerations
         presence_penalty=0.0
@@ -151,6 +167,8 @@ def sport_coach_answer(user_message):
     try:
         data = response.json()['data']
         for item in data:
+            if item.get("total_sleep_duration") < 1500:  # skip naps
+                continue
             day_diff = (end_date - date.fromisoformat(item["bedtime_end"][:10])).days
             daily_stats[str(day_diff) + " days ago"]['Morning data']['Total sleep'] = item.get("total_sleep_duration")/3600  # in hours
             daily_stats[str(day_diff) + " days ago"]['Morning data']['HRV'] = item.get("average_hrv")
@@ -209,31 +227,35 @@ def sport_coach_answer(user_message):
 
     user_instructions = get_user_instructions()
 
+    silent_notes = get_silent_notes()
+
     # construct context
     context = f"Personal info and baselines: {personal_info}\n\n"
     context += f"Daily stats (last 14 days): {daily_stats}\n\n"
     context += f"User instructions: {user_instructions}\n\n"
+    context += f"LLM silent notes: {silent_notes}\n\n"
 
     # construct context string
     sysprompt = f"You are a professional sport coach. Answer the user questions. Here is the context:\n{context}"
     history = get_history(n=5)
     print(sysprompt)
     print(user_message)
-    answer = ask_gpt(sysprompt, history, user_message)
+    answer = ask_gpt(sysprompt, user_message, history=history)
     print(answer)
 
     # update history
     history.append({"role": "user", "content": user_message})
-    # cut assistant message to 1000 chars, user messages more important
+    # cut assistant message to 1000 chars, user messages more important for history
     if answer and len(answer) > 1000:
-        answer = answer[:1000] + "..."
-    history.append({"role": "assistant", "content": answer})
+        history.append({"role": "assistant", "content": answer[:1000] + "..."})
+    else:
+        history.append({"role": "assistant", "content": answer})
     save_history(history)
     # return as plain text
     return answer
 
 # debug coach
-#sport_coach_answer("Pick one randomly, swimming or running today?")
+#sport_coach_answer("How many players are there on the field during a soccer match?")
 
 @app.route(route="telegram/webhook", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
@@ -316,3 +338,34 @@ def _send_chat_action(api_base: str, chat_id: int, action: str):
     except Exception:
         pass
 
+
+@app.timer_trigger(schedule="0 0 1 * * *", arg_name="myTimer", run_on_startup=False,
+              use_monitor=False) 
+def update_silent_notes(myTimer: func.TimerRequest) -> None:
+    
+    history = get_history(n=1000)
+    max_len = 1500*4  # approx 4 chars per token
+    # take messages from the end until max_len is reached. Only user messages
+    combined_text = ""
+    for msg in reversed(history):
+        if msg["role"] == "user":
+            if len(combined_text) + len(msg["content"]) > max_len:
+                break
+            combined_text = msg["content"] + "\n" + combined_text
+
+    old_silent_notes = get_silent_notes()
+    sysprompt = f"""You are a professional sport coach.
+You have been assisting a user with their sport coaching needs.
+Current user instructions:
+{old_silent_notes}
+
+Based on the recent conversation history below, update the silent notes.
+Keep the notes short, only few bullet points summarizing what has been discussed.
+Focus on stuff that should affect your future responses, this is your flexible memory.
+"""
+    user_turn = f"""Recent conversation history:
+{combined_text}
+"""
+    new_silent_notes = ask_gpt(sysprompt, user_turn)
+    save_silent_notes(new_silent_notes)
+    logging.info("Silent notes updated.")
